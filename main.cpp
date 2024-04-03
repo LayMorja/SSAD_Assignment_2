@@ -5,6 +5,7 @@
 #include <map>
 #include <memory>
 #include <ostream>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -20,9 +21,6 @@ class Spell;
 template <typename CurClass>
 concept PhysicalDerived = std::is_base_of<PhysicalItem, CurClass>::value;
 
-template <typename CurClass>
-concept CharacterDerived = std::is_base_of<Character, CurClass>::value;
-
 // --- CHARACTER DECLARATION ---
 class Character {
 private:
@@ -30,17 +28,22 @@ private:
   std::string name;
 
 protected:
+/*
   virtual void obtainItemSideEffect(const PhysicalItem &) = 0;
   virtual void loseItemSideEffect(const PhysicalItem &) = 0;
+*/
   friend std::ostream &operator<<(std::ostream &, const Character &);
 
 public:
+  Character(int, const std::string&);
   int getHP() const;
   std::string getName() const;
   void takeDamage(int);
   void heal(int);
+  virtual ~Character() = default;
 };
 // --- CHARACTER DEFINITION ---
+Character::Character(int healthPoints, const std::string& name) : healthPoints(healthPoints), name(name) {}
 int Character::getHP() const { return healthPoints; }
 std::string Character::getName() const { return name; }
 void Character::takeDamage(int damage) { healthPoints -= damage; }
@@ -54,7 +57,7 @@ std::ostream &operator<<(std::ostream &out, const Character &character) {
 class PhysicalItem {
 private:
   bool isUsableOnce;
-  std::unique_ptr<Character> owner;
+  std::shared_ptr<Character> owner;
   std::string name;
 
 protected:
@@ -68,16 +71,16 @@ protected:
 
 public:
   PhysicalItem();
-  PhysicalItem(std::unique_ptr<Character>, const std::string &);
+  PhysicalItem(bool, std::shared_ptr<Character>, const std::string &);
   void use(const Character &, const Character &);
   std::string getName() const;
   virtual void setup() = 0;
 };
 // --- ITEM DEFINITION ---
 PhysicalItem::PhysicalItem() : isUsableOnce(false), owner(), name(nullptr) {}
-PhysicalItem::PhysicalItem(std::unique_ptr<Character> ch,
+PhysicalItem::PhysicalItem(bool usage, std::shared_ptr<Character> ch,
                            const std::string &name)
-    : isUsableOnce(false), owner(std::move(ch)), name(name) {}
+    : isUsableOnce(usage), owner(std::move(ch)), name(name) {}
 std::string PhysicalItem::getName() const { return name; }
 void PhysicalItem::giveDamageTo(Character &target, int damage) {
   target.takeDamage(damage);
@@ -100,7 +103,7 @@ public:
   void setup() override;
 };
 // --- WEAPON DEFINITION ---
-Weapon::Weapon(int damage) : damage(damage) {}
+Weapon::Weapon(int damage) : isUsableOnce(false), damage(damage) {}
 int Weapon::getDamage() { return damage; }
 std::ostream &operator<<(std::ostream &out, const Weapon &weapon) {
   out << weapon.getName() << ":" << weapon.damage;
@@ -141,10 +144,10 @@ std::ostream &operator<<(std::ostream &out, const Spell &spell) {
   return out;
 };
 
-template <typename T> class Container {};
+/*template <typename T> class Container {};*/
 
 // --- CONTAINER WITH CONCEPT DECLARATION ---
-template <PhysicalDerived T> class Container<T> {
+template <PhysicalDerived T> class Container {
 protected:
   std::map<std::string, T> elements;
 
@@ -213,13 +216,15 @@ using Arsenal = ContainerWithMaxCapacity<Weapon>;
 using MedicalBag = ContainerWithMaxCapacity<Potion>;
 using SpellBook = ContainerWithMaxCapacity<Spell>;
 
-class WeaponUser : public Character {
+class WeaponUser : virtual public Character {
 protected:
   Arsenal arsenal;
 public:
+  WeaponUser(int, const std::string&);
   void attack(std::unique_ptr<Character>, const std::string&);
   void showWeapons(std::ofstream& out);
 };
+WeaponUser::WeaponUser(int healthPoints, const std::string &name) : Character(healthPoints, name)  {}
 void WeaponUser::attack(std::unique_ptr<Character> target, const std::string& weapon) {
   int damage = arsenal.find(weapon).getDamage();
   target->takeDamage(damage);
@@ -227,12 +232,59 @@ void WeaponUser::attack(std::unique_ptr<Character> target, const std::string& we
 void WeaponUser::showWeapons(std::ofstream& out) {
   arsenal.show(out);
 }
+class PotionUser : virtual public Character {
+protected:
+  MedicalBag medicalBag;
+public:
+  PotionUser(int, const std::string&);
+  void drink(std::shared_ptr<Character>, const std::string&);
+  void showPotions(std::ofstream&);
+};
+PotionUser::PotionUser(int healthPoints, const std::string &name) : Character(healthPoints, name)  {}
+void PotionUser::drink(std::shared_ptr<Character> target, const std::string &potion) {
+  int healValue = medicalBag.find(potion).getHealValue();
+  target->heal(healValue);
+}
+void PotionUser::showPotions(std::ofstream& out) {
+  medicalBag.show(out);
+}
+class SpellUser : virtual public Character {
+protected:
+  SpellBook spellBook;
+public:
+  SpellUser(int, const std::string&);
+  void cast(std::shared_ptr<Character>, const std::string&);
+  void showSpells(std::ofstream&);
+};
+SpellUser::SpellUser(int healthPoints, const std::string &name) : Character(healthPoints, name)  {}
+void SpellUser::cast(std::shared_ptr<Character> target, const std::string &potion) {
+  Spell spell = spellBook.find(potion);
+  spell.use(*this, target);
+}
+void SpellUser::showSpells(std::ofstream& out) {
+  spellBook.show(out);
+}
+
+class Fighter : public WeaponUser, public PotionUser {
+public:
+  Fighter(int, const std::string &);
+};
+Fighter::Fighter(int healthPoints, const std::string& name) : Character(healthPoints, name), WeaponUser(healthPoints, name), PotionUser(healthPoints, name) {}
+class Archer : public WeaponUser, public PotionUser, public SpellUser {
+  Archer(int, const std::string &);
+};
+Archer::Archer(int healthPoints, const std::string& name) : Character(healthPoints, name), WeaponUser(healthPoints, name), PotionUser(healthPoints, name), SpellUser(healthPoints, name) {}
+class Wizard : public PotionUser, public SpellUser {
+  Wizard(int, const std::string &);
+};
+Wizard::Wizard(int healthPoints, const std::string& name) : Character(healthPoints, name), PotionUser(healthPoints, name), SpellUser(healthPoints, name) {}
 
 class FantasyStory {
 private:
   std::ifstream in;  // reading stream "input.txt"
   std::ofstream out; // writing stream "output.txt"
   int actions;       // number of input commands to validate
+  std::map<std::string, std::shared_ptr<Character>> characters;
 
 public:
   FantasyStory(); // take commands, start the game
@@ -240,11 +292,12 @@ public:
   FantasyStory &operator=(const FantasyStory &) = delete;
 
   void startStoryTelling(); // process input line by line
-  void processTheCommand(const std::string &);
+  void processAction(const std::string &);
+  void createCharacter(std::istringstream&);
+  void createItem(std::istringstream&);
 };
 FantasyStory::FantasyStory() {
-  int actions_count;
-  in >> actions_count;
+  in >> actions;
   startStoryTelling();
 }
 void FantasyStory::startStoryTelling() {
@@ -253,12 +306,44 @@ void FantasyStory::startStoryTelling() {
     getline(in, current_command);
 
     try {
-      processTheCommand(current_command);
+      processAction(current_command);
     } catch (const std::runtime_error &err) {
       out << err.what() << '\n';
     }
   }
 }
-void FantasyStory::processTheCommand(const std::string &command) {}
+void FantasyStory::processAction(const std::string& actionLine) {
+  std::istringstream action(actionLine);
+  std::string currentAction;
+  action >> currentAction;
+
+  if (currentAction == "Create") {
+    std::string creation_type;
+    in >> creation_type;
+    if (creation_type == "character") {
+      createCharacter(action);
+    } else {
+      createItem(action);
+    }
+  } else if (currentAction == "Show") {
+  } else if (currentAction == "Dialogue") {
+  } else {
+  }
+}
+void FantasyStory::createCharacter(std::istringstream &actionLine) {
+  std::string type, name;
+  int healthPoints;
+  actionLine >> type >> name >> healthPoints;
+
+  if (type == "fighter") {
+    std::shared_ptr<Character> fighter = std::make_shared<Fighter>(healthPoints, name);
+    characters.insert(std::make_pair(name, fighter));
+  } else if (type == "wizard") {
+
+  } else {
+
+  }
+  characters.insert(std::make_pair(name, ))
+}
 
 int main() { FantasyStory start; }
